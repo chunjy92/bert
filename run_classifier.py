@@ -242,7 +242,7 @@ class ExplicitDRSProcessor(DataProcessor):
     return self._create_examples(data_dir, "test")
 
   def _create_examples(self, data_dir, set_type):
-    """Only implicit examples
+    """Only explicit examples
     """
     imp_dir = os.path.join(data_dir, "explicit", set_type)
     filename = os.path.join(imp_dir, "relations.json")
@@ -268,6 +268,40 @@ class ExplicitDRSProcessor(DataProcessor):
                        label=label))
     return examples
 
+def _truncate_seq_pair(tokens_a, tokens_b, max_length):
+  """Truncates a sequence pair in place to the maximum length."""
+
+  # This is a simple heuristic which will always truncate the longer sequence
+  # one token at a time. This makes more sense than truncating an equal percent
+  # of tokens from each, since if one sequence is very short then each token
+  # that's truncated likely contains more information than a longer sequence.
+  while True:
+    total_length = len(tokens_a) + len(tokens_b)
+    if total_length <= max_length:
+      break
+    if len(tokens_a) > len(tokens_b):
+      tokens_a.pop()
+    else:
+      tokens_b.pop()
+
+def _truncate_seq_triple(tokens_a, tokens_b, tokens_c, max_length):
+  while True:
+    la, lb, lc   = len(tokens_a), len(tokens_b), len(tokens_c)
+    total_length = la + lb + lc
+
+    if total_length <= max_length:
+      break
+
+    lengths = [la, lb, lc]
+    max_l   = max(lengths)
+    max_idx = lengths.index(max_l)
+
+    if max_idx==0:
+      tokens_a.pop()
+    elif max_idx==1:
+      tokens_b.pop()
+    else:
+      tokens_c.pop()
 
 def convert_single_example(ex_index, example, label_list, max_seq_length,
                            tokenizer):
@@ -287,10 +321,19 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
 
   tokens_a = tokenizer.tokenize(example.text_a)
   tokens_b = None
+  tokens_c = None
+
   if example.text_b:
     tokens_b = tokenizer.tokenize(example.text_b)
 
-  if tokens_b:
+  if example.text_c:
+    tokens_c = tokenizer.tokenize(example.text_c)
+
+  if tokens_c:
+    # [CLS], [SEP], [SEP], [SEP] with "-4"
+    _truncate_seq_triple(tokens_a, tokens_b, tokens_c,
+                         max_seq_length-4)
+  elif tokens_b:
     # Modifies `tokens_a` and `tokens_b` in place so that the total
     # length is less than the specified length.
     # Account for [CLS], [SEP], [SEP] with "- 3"
@@ -327,6 +370,13 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     segment_ids.append(0)
   tokens.append("[SEP]")
   segment_ids.append(0)
+
+  if tokens_c:
+    for token in tokens_c:
+      tokens.append(token)
+      segment_ids.append(0)
+    tokens.append("[SEP]")
+    segment_ids.append(0)
 
   if tokens_b:
     for token in tokens_b:
@@ -432,22 +482,6 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
     return d
 
   return input_fn
-
-def _truncate_seq_pair(tokens_a, tokens_b, max_length):
-  """Truncates a sequence pair in place to the maximum length."""
-
-  # This is a simple heuristic which will always truncate the longer sequence
-  # one token at a time. This makes more sense than truncating an equal percent
-  # of tokens from each, since if one sequence is very short then each token
-  # that's truncated likely contains more information than a longer sequence.
-  while True:
-    total_length = len(tokens_a) + len(tokens_b)
-    if total_length <= max_length:
-      break
-    if len(tokens_a) > len(tokens_b):
-      tokens_a.pop()
-    else:
-      tokens_b.pop()
 
 def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
                  labels, num_labels, use_one_hot_embeddings):
