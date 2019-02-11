@@ -20,48 +20,48 @@ from __future__ import print_function
 
 import collections
 import csv
-import os
-import codecs
 import json
+
+import codecs
+import numpy as np
+import os
+import tensorflow as tf
+
+import drs
 import modeling
 import optimization
 import tokenization
 
-import numpy as np
-import tensorflow as tf
-
-from drs import get_senses_with_degree, to_degree
-
 flags = tf.flags
-
 FLAGS = flags.FLAGS
 
-## Required parameters
-flags.DEFINE_string(
-    "data_dir", None,
-    "The input data dir. Should contain the .tsv files (or other data files) "
-    "for the task.")
-
-flags.DEFINE_string(
-    "bert_config_file", None,
-    "The config json file corresponding to the pre-trained BERT model. "
-    "This specifies the model architecture.")
-
-flags.DEFINE_string("vocab_file", None,
-                    "The vocabulary file that the BERT model was trained on.")
-
+# required
 flags.DEFINE_string(
     "output_dir", None,
     "The output directory where the model checkpoints will be written.")
 
-## Other parameters
+# other
+flags.DEFINE_string("task_type", "implicit", "Implicit or Explicit")
 
 flags.DEFINE_string(
-    "init_checkpoint", None,
+    "data_dir", "/home/b/jchun/Documents/Data/DiscourseRelation",
+    "The input data dir. Should contain the .tsv files (or other data files) "
+    "for the task.")
+
+flags.DEFINE_string(
+    "bert_config_file", "uncased_L-12_H-768_A-12/bert_config.json",
+    "The config json file corresponding to the pre-trained BERT model. "
+    "This specifies the model architecture.")
+
+flags.DEFINE_string("vocab_file", "uncased_L-12_H-768_A-12/vocab.txt",
+                    "The vocabulary file that the BERT model was trained on.")
+
+flags.DEFINE_string(
+    "init_checkpoint", "uncased_L-12_H-768_A-12/bert_model.ckpt",
     "Initial checkpoint (usually from a pre-trained BERT model).")
 
 flags.DEFINE_bool(
-    "do_lower_case", True,
+    "do_lower_case", False,
     "Whether to lower case the input text. Should be True for uncased "
     "models and False for cased models.")
 
@@ -90,6 +90,9 @@ flags.DEFINE_float("learning_rate", 5e-5, "The initial learning rate for Adam.")
 flags.DEFINE_float("num_train_epochs", 3.0,
                    "Total number of training epochs to perform.")
 
+flags.DEFINE_float("dropout_keep_prob", 0.9,
+                   "Dropout rate during training")
+
 flags.DEFINE_float(
     "warmup_proportion", 0.1,
     "Proportion of training to perform linear learning rate warmup for. "
@@ -101,37 +104,14 @@ flags.DEFINE_integer("save_checkpoints_steps", 1000,
 flags.DEFINE_integer("iterations_per_loop", 1000,
                      "How many steps to make in each estimator call.")
 
-flags.DEFINE_bool("use_tpu", False, "Whether to use TPU or GPU/CPU.")
 
-tf.flags.DEFINE_string(
-    "tpu_name", None,
-    "The Cloud TPU to use for training. This should be either the name "
-    "used when creating the Cloud TPU, or a grpc://ip.address.of.tpu:8470 "
-    "url.")
 
-tf.flags.DEFINE_string(
-    "tpu_zone", None,
-    "[Optional] GCE zone where the Cloud TPU is located in. If not "
-    "specified, we will attempt to automatically detect the GCE project from "
-    "metadata.")
-
-tf.flags.DEFINE_string(
-    "gcp_project", None,
-    "[Optional] Project name for the Cloud TPU-enabled project. If not "
-    "specified, we will attempt to automatically detect the GCE project from "
-    "metadata.")
-
-tf.flags.DEFINE_string("master", None, "[Optional] TensorFlow master URL.")
-
-flags.DEFINE_integer(
-    "num_tpu_cores", 8,
-    "Only used if `use_tpu` is True. Total number of TPU cores to use.")
 
 
 class InputExample(object):
   """A single training/test example for simple sequence classification."""
 
-  def __init__(self, guid, text_a, text_b=None, label=None):
+  def __init__(self, guid, text_a, text_b=None, text_c=None, label=None):
     """Constructs a InputExample.
 
     Args:
@@ -143,10 +123,11 @@ class InputExample(object):
       label: (Optional) string. The label of the example. This should be
         specified for train and dev examples, but not for test examples.
     """
-    self.guid = guid
+    self.guid   = guid
     self.text_a = text_a
     self.text_b = text_b
-    self.label = label
+    self.text_c = text_c
+    self.label  = label
 
 
 class PaddingInputExample(object):
@@ -164,7 +145,6 @@ class PaddingInputExample(object):
 
 class InputFeatures(object):
   """A single set of features of data."""
-
   def __init__(self,
                input_ids,
                input_mask,
@@ -208,10 +188,10 @@ class DataProcessor(object):
       return lines
 
 
-class DRSProcessor(DataProcessor):
+class ImplicitDRSProcessor(DataProcessor):
   """Processor for the DRS Sense data set"""
   def get_labels(self):
-    return get_senses_with_degree(degree=2)
+    return drs.get_senses_with_degree(degree=2)
 
   def get_train_examples(self, data_dir):
     return self._create_examples(data_dir, "train")
@@ -242,10 +222,52 @@ class DRSProcessor(DataProcessor):
       # for multiple senses, duplicate example but each labeled with different
       # sense
       for sense in sense_list:
-        label = tokenization.convert_to_unicode(to_degree(sense, 2))
+        label = tokenization.convert_to_unicode(drs.to_degree(sense, 2))
         examples.append(
           InputExample(guid=guid, text_a=arg1, text_b=arg2, label=label))
     return examples
+
+class ExplicitDRSProcessor(DataProcessor):
+  """Processor for the DRS Sense data set"""
+  def get_labels(self):
+    return drs.get_senses_with_degree(degree=2)
+
+  def get_train_examples(self, data_dir):
+    return self._create_examples(data_dir, "train")
+
+  def get_dev_examples(self, data_dir):
+    return self._create_examples(data_dir, "dev")
+
+  def get_test_examples(self, data_dir):
+    return self._create_examples(data_dir, "test")
+
+  def _create_examples(self, data_dir, set_type):
+    """Only implicit examples
+    """
+    imp_dir = os.path.join(data_dir, "explicit", set_type)
+    filename = os.path.join(imp_dir, "relations.json")
+
+    pdtb = codecs.open(filename, encoding='utf-8')
+
+    examples = []
+    for i, pdtb_line in enumerate(pdtb):
+      guid = "%s-%d" % (set_type, i)
+      rel  = json.loads(pdtb_line)
+
+      conn = tokenization.convert_to_unicode(rel['Connective']['RawText'])
+      arg1 = tokenization.convert_to_unicode(rel['Arg1']['RawText'])
+      arg2 = tokenization.convert_to_unicode(rel['Arg2']['RawText'])
+      sense_list = rel['Sense']
+
+      # for multiple senses, duplicate example but each labeled with different
+      # sense
+      for sense in sense_list:
+        label = tokenization.convert_to_unicode(drs.to_degree(sense, 2))
+        examples.append(
+          InputExample(guid=guid, text_a=arg1, text_b=arg2, text_c=conn,
+                       label=label))
+    return examples
+
 
 def convert_single_example(ex_index, example, label_list, max_seq_length,
                            tokenizer):
@@ -391,20 +413,6 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
       "is_real_example": tf.FixedLenFeature([], tf.int64),
   }
 
-  def _decode_record(record, name_to_features):
-    """Decodes a record to a TensorFlow example."""
-    example = tf.parse_single_example(record, name_to_features)
-
-    # tf.Example only supports tf.int64, but the TPU only supports tf.int32.
-    # So cast all int64 to int32.
-    for name in list(example.keys()):
-      t = example[name]
-      if t.dtype == tf.int64:
-        t = tf.to_int32(t)
-      example[name] = t
-
-    return example
-
   def input_fn(params):
     """The actual input function."""
     batch_size = params["batch_size"]
@@ -418,14 +426,12 @@ def file_based_input_fn_builder(input_file, seq_length, is_training,
 
     d = d.apply(
         tf.contrib.data.map_and_batch(
-            lambda record: _decode_record(record, name_to_features),
+            lambda record: tf.parse_single_example(record, name_to_features),
             batch_size=batch_size,
             drop_remainder=drop_remainder))
-
     return d
 
   return input_fn
-
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
   """Truncates a sequence pair in place to the maximum length."""
@@ -442,7 +448,6 @@ def _truncate_seq_pair(tokens_a, tokens_b, max_length):
       tokens_a.pop()
     else:
       tokens_b.pop()
-
 
 def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
                  labels, num_labels, use_one_hot_embeddings):
@@ -473,8 +478,8 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 
   with tf.variable_scope("loss"):
     if is_training:
-      # I.e., 0.1 dropout
-      output_layer = tf.nn.dropout(output_layer, keep_prob=0.9)
+      output_layer = tf.nn.dropout(output_layer,
+                                   keep_prob=FLAGS.dropout_keep_prob)
 
     logits = tf.matmul(output_layer, output_weights, transpose_b=True)
     logits = tf.nn.bias_add(logits, output_bias)
@@ -490,8 +495,7 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 
 
 def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
-                     num_train_steps, num_warmup_steps, use_tpu,
-                     use_one_hot_embeddings):
+                     num_train_steps, num_warmup_steps, use_one_hot_embeddings):
   """Returns `model_fn` closure for TPUEstimator."""
 
   def model_fn(features, labels, mode, params):  # pylint: disable=unused-argument
@@ -519,19 +523,12 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
-    scaffold_fn = None
     if init_checkpoint:
       (assignment_map, initialized_variable_names
       ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
-      if use_tpu:
 
-        def tpu_scaffold():
-          tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
-          return tf.train.Scaffold()
 
-        scaffold_fn = tpu_scaffold
-      else:
-        tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
+      tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
     tf.logging.info("**** Trainable Variables ****")
     for var in tvars:
@@ -541,17 +538,16 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
       tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
                       init_string)
 
-    output_spec = None
     if mode == tf.estimator.ModeKeys.TRAIN:
 
       train_op = optimization.create_optimizer(
-          total_loss, learning_rate, num_train_steps, num_warmup_steps, use_tpu)
+        total_loss, learning_rate, num_train_steps, num_warmup_steps,
+        use_tpu=False)
 
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
-          train_op=train_op,
-          scaffold_fn=scaffold_fn)
+          train_op=train_op)
     elif mode == tf.estimator.ModeKeys.EVAL :
 
       def metric_fn(per_example_loss, label_ids, logits, is_real_example):
@@ -566,74 +562,21 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
       eval_metrics = (metric_fn,
                       [per_example_loss, label_ids, logits, is_real_example])
+
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
           eval_metrics=eval_metrics,
-          scaffold_fn=scaffold_fn,
           predictions={"probabilities": probabilities})
     else: # predict case
+
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
-          predictions={"probabilities": probabilities},
-          scaffold_fn=scaffold_fn)
+          predictions={"probabilities": probabilities})
     return output_spec
 
   return model_fn
 
-
-# This function is not used by this file but is still used by the Colab and
-# people who depend on it.
-def input_fn_builder(features, seq_length, is_training, drop_remainder):
-  """Creates an `input_fn` closure to be passed to TPUEstimator."""
-
-  all_input_ids = []
-  all_input_mask = []
-  all_segment_ids = []
-  all_label_ids = []
-
-  for feature in features:
-    all_input_ids.append(feature.input_ids)
-    all_input_mask.append(feature.input_mask)
-    all_segment_ids.append(feature.segment_ids)
-    all_label_ids.append(feature.label_id)
-
-  def input_fn(params):
-    """The actual input function."""
-    batch_size = params["batch_size"]
-
-    num_examples = len(features)
-
-    # This is for demo purposes and does NOT scale to large data sets. We do
-    # not use Dataset.from_generator() because that uses tf.py_func which is
-    # not TPU compatible. The right way to load data is with TFRecordReader.
-    d = tf.data.Dataset.from_tensor_slices({
-        "input_ids":
-            tf.constant(
-                all_input_ids, shape=[num_examples, seq_length],
-                dtype=tf.int32),
-        "input_mask":
-            tf.constant(
-                all_input_mask,
-                shape=[num_examples, seq_length],
-                dtype=tf.int32),
-        "segment_ids":
-            tf.constant(
-                all_segment_ids,
-                shape=[num_examples, seq_length],
-                dtype=tf.int32),
-        "label_ids":
-            tf.constant(all_label_ids, shape=[num_examples], dtype=tf.int32),
-    })
-
-    if is_training:
-      d = d.repeat()
-      d = d.shuffle(buffer_size=100)
-
-    d = d.batch(batch_size=batch_size, drop_remainder=drop_remainder)
-    return d
-
-  return input_fn
 
 def main(_):
   tf.logging.set_verbosity(tf.logging.INFO)
@@ -655,26 +598,23 @@ def main(_):
 
   tf.gfile.MakeDirs(FLAGS.output_dir)
 
-  processor = DRSProcessor()
+  task_type = FLAGS.task_type.lower()
+  if task_type.startswith("imp"):
+    processor = ImplicitDRSProcessor()
+  else:
+    processor = ExplicitDRSProcessor()
 
   label_list = processor.get_labels()
   tokenizer  = tokenization.FullTokenizer(
       vocab_file=FLAGS.vocab_file, do_lower_case=FLAGS.do_lower_case)
 
-  tpu_cluster_resolver = None
-  if FLAGS.use_tpu and FLAGS.tpu_name:
-    tpu_cluster_resolver = tf.contrib.cluster_resolver.TPUClusterResolver(
-        FLAGS.tpu_name, zone=FLAGS.tpu_zone, project=FLAGS.gcp_project)
-
   is_per_host = tf.contrib.tpu.InputPipelineConfig.PER_HOST_V2
   run_config = tf.contrib.tpu.RunConfig(
-      cluster=tpu_cluster_resolver,
-      master=FLAGS.master,
+      cluster=None,
       model_dir=FLAGS.output_dir,
       save_checkpoints_steps=FLAGS.save_checkpoints_steps,
       tpu_config=tf.contrib.tpu.TPUConfig(
           iterations_per_loop=FLAGS.iterations_per_loop,
-          num_shards=FLAGS.num_tpu_cores,
           per_host_input_for_training=is_per_host))
 
   train_examples = None
@@ -693,13 +633,10 @@ def main(_):
       learning_rate=FLAGS.learning_rate,
       num_train_steps=num_train_steps,
       num_warmup_steps=num_warmup_steps,
-      use_tpu=FLAGS.use_tpu,
-      use_one_hot_embeddings=FLAGS.use_tpu)
+      use_one_hot_embeddings=False)
 
-  # If TPU is not available, this will fall back to normal Estimator on CPU
-  # or GPU.
   estimator = tf.contrib.tpu.TPUEstimator(
-      use_tpu=FLAGS.use_tpu,
+      use_tpu=False,
       model_fn=model_fn,
       config=run_config,
       train_batch_size=FLAGS.train_batch_size,
@@ -724,14 +661,6 @@ def main(_):
   if FLAGS.do_eval:
     eval_examples = processor.get_dev_examples(FLAGS.data_dir)
     num_actual_eval_examples = len(eval_examples)
-    if FLAGS.use_tpu:
-      # TPU requires a fixed batch size for all batches, therefore the number
-      # of examples must be a multiple of the batch size, or else examples
-      # will get dropped. So we pad with fake examples which are ignored
-      # later on. These do NOT count towards the metric (all tf.metrics
-      # support a per-instance weight, and these get a weight of 0.0).
-      while len(eval_examples) % FLAGS.eval_batch_size != 0:
-        eval_examples.append(PaddingInputExample())
 
     eval_file = os.path.join(FLAGS.output_dir, "eval.tf_record")
     file_based_convert_examples_to_features(
@@ -743,22 +672,13 @@ def main(_):
                     len(eval_examples) - num_actual_eval_examples)
     tf.logging.info("  Batch size = %d", FLAGS.eval_batch_size)
 
-    # This tells the estimator to run through the entire set.
-    eval_steps = None
-    # However, if running eval on the TPU, you will need to specify the
-    # number of steps.
-    if FLAGS.use_tpu:
-      assert len(eval_examples) % FLAGS.eval_batch_size == 0
-      eval_steps = int(len(eval_examples) // FLAGS.eval_batch_size)
-
-    eval_drop_remainder = True if FLAGS.use_tpu else False
     eval_input_fn = file_based_input_fn_builder(
         input_file=eval_file,
         seq_length=FLAGS.max_seq_length,
         is_training=False,
-        drop_remainder=eval_drop_remainder)
+        drop_remainder=False)
 
-    result = estimator.evaluate(input_fn=eval_input_fn, steps=eval_steps)
+    result = estimator.evaluate(input_fn=eval_input_fn)
 
     output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
     with tf.gfile.GFile(output_eval_file, "w") as writer:
@@ -770,31 +690,23 @@ def main(_):
   if FLAGS.do_predict:
     predict_examples = processor.get_test_examples(FLAGS.data_dir)
     num_actual_predict_examples = len(predict_examples)
-    if FLAGS.use_tpu:
-      # TPU requires a fixed batch size for all batches, therefore the number
-      # of examples must be a multiple of the batch size, or else examples
-      # will get dropped. So we pad with fake examples which are ignored
-      # later on.
-      while len(predict_examples) % FLAGS.predict_batch_size != 0:
-        predict_examples.append(PaddingInputExample())
 
     predict_file = os.path.join(FLAGS.output_dir, "predict.tf_record")
     file_based_convert_examples_to_features(predict_examples, label_list,
                                             FLAGS.max_seq_length, tokenizer,
                                             predict_file)
 
-    tf.logging.info("***** Running prediction*****")
+    tf.logging.info("***** Running prediction *****")
     tf.logging.info("  Num examples = %d (%d actual, %d padding)",
                     len(predict_examples), num_actual_predict_examples,
                     len(predict_examples) - num_actual_predict_examples)
     tf.logging.info("  Batch size = %d", FLAGS.predict_batch_size)
 
-    predict_drop_remainder = True if FLAGS.use_tpu else False
     predict_input_fn = file_based_input_fn_builder(
         input_file=predict_file,
         seq_length=FLAGS.max_seq_length,
         is_training=False,
-        drop_remainder=predict_drop_remainder)
+        drop_remainder=False)
 
     result = estimator.predict(input_fn=predict_input_fn)
 
@@ -815,8 +727,21 @@ def main(_):
 
 
 if __name__ == "__main__":
-  flags.mark_flag_as_required("data_dir")
-  flags.mark_flag_as_required("vocab_file")
-  flags.mark_flag_as_required("bert_config_file")
   flags.mark_flag_as_required("output_dir")
+
+  if not FLAGS.do_lower_case and FLAGS.bert_config_file.startswith("uncased"):
+    tf.logging.info("Using uncased BERT pre-trained model while lowering case:"
+                    " Proceeding with uncased model")
+    FLAGS.do_lower_case = True
+
+  if FLAGS.do_lower_case and FLAGS.bert_config_file.startswith("cased"):
+    tf.logging.info("Using cased BERT pre-trained model while not lowering "
+                    "case: Proceeding with cased model")
+    FLAGS.do_lower_case = False
+
+  if FLAGS.do_lower_case:
+    tf.logging.info("Loading Uncased BERT")
+  else:
+    tf.logging.info("Loading Cased BERT")
+
   tf.app.run()
