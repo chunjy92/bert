@@ -105,9 +105,6 @@ flags.DEFINE_integer("iterations_per_loop", 1000,
                      "How many steps to make in each estimator call.")
 
 
-
-
-
 class InputExample(object):
   """A single training/test example for simple sequence classification."""
 
@@ -499,6 +496,10 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
   #
   # If you want to use the token-level output, use model.get_sequence_output()
   # instead.
+
+  # first collect attention data for visualization
+  viz_attns = model.get_viz_attns()
+
   output_layer = model.get_pooled_output()
 
   hidden_size = output_layer.shape[-1].value
@@ -525,7 +526,8 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
     per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
     loss = tf.reduce_mean(per_example_loss)
 
-    return (loss, per_example_loss, logits, probabilities)
+
+    return (loss, per_example_loss, logits, probabilities, viz_attns)
 
 
 def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
@@ -551,9 +553,9 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
 
-    (total_loss, per_example_loss, logits, probabilities) = create_model(
-        bert_config, is_training, input_ids, input_mask, segment_ids, label_ids,
-        num_labels, use_one_hot_embeddings)
+    (total_loss, per_example_loss, logits, probabilities, viz_attns) = \
+      create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
+                   label_ids, num_labels, use_one_hot_embeddings)
 
     tvars = tf.trainable_variables()
     initialized_variable_names = {}
@@ -601,12 +603,14 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
           mode=mode,
           loss=total_loss,
           eval_metrics=eval_metrics,
-          predictions={"probabilities": probabilities})
+          predictions={"probabilities": probabilities,
+                       "viz_attns:": viz_attns})
     else: # predict case
 
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
-          predictions={"probabilities": probabilities})
+          predictions={"probabilities": probabilities,
+                       "viz_attns": viz_attns})
     return output_spec
 
   return model_fn
@@ -751,12 +755,22 @@ def main(_):
       num_written_lines = 0
       tf.logging.info("***** Predict results *****")
       for (i, prediction) in enumerate(result):
+        # if i==0:
+        #   a = prediction['viz_attns']
+        #
+        #   tf.logging.info("Pred ATTN PRobs Info:")
+        #   tf.logging.info("{}, {}".format(str(a.dtype), str(a.shape)))
+        #   tf.logging.info("{}".format(str(a)))
+
+        # tf.logging.info("{}-".format(i))
         probabilities = prediction["probabilities"]
         if i >= num_actual_predict_examples:
           break
         output_line = label_list[np.argmax(probabilities)] + "\n"
         writer.write(output_line)
         num_written_lines += 1
+
+    tf.logging.info("{} vs {}".format(num_written_lines, num_actual_predict_examples))
     assert num_written_lines == num_actual_predict_examples
 
 

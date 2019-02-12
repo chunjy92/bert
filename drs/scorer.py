@@ -55,6 +55,11 @@ if __name__=='__main__':
     gold_list = [line.strip() for line in open(gold)]
     auto_list = [line.strip() for line in open(auto)]
 
-    print('='*90 + '\nEvaluation for all discourse relations\n')
+    if 'implicit' in gold:
+        task_type = "implicit"
+    else:
+        task_type = "explicit"
+
+    print('='*90 + '\nEvaluation for {} discourse relations\n'.format(task_type))
     accuracy(gold_list, auto_list)
     prf(gold_list, auto_list)

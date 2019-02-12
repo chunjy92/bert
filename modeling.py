@@ -203,7 +203,7 @@ class BertModel(object):
 
         # Run the stacked transformer.
         # `sequence_output` shape = [batch_size, seq_length, hidden_size].
-        self.all_encoder_layers = transformer_model(
+        self.all_encoder_layers, self.viz_attns = transformer_model(
             input_tensor=self.embedding_output,
             attention_mask=attention_mask,
             hidden_size=config.hidden_size,
@@ -231,6 +231,9 @@ class BertModel(object):
             config.hidden_size,
             activation=tf.tanh,
             kernel_initializer=create_initializer(config.initializer_range))
+
+  def get_viz_attns(self):
+    return self.viz_attns
 
   def get_pooled_output(self):
     return self.pooled_output
@@ -750,7 +753,10 @@ def attention_layer(from_tensor,
         context_layer,
         [batch_size, from_seq_length, num_attention_heads * size_per_head])
 
-  return context_layer
+  # for visualization
+  # viz_attn = tf.convert_to_tensor([attention_probs, query_layer, key_layer])
+
+  return context_layer, attention_probs
 
 
 def transformer_model(input_tensor,
@@ -825,6 +831,7 @@ def transformer_model(input_tensor,
   prev_output = reshape_to_matrix(input_tensor)
 
   all_layer_outputs = []
+  viz_attns = [] # for visualization
   for layer_idx in range(num_hidden_layers):
     with tf.variable_scope("layer_%d" % layer_idx):
       layer_input = prev_output
@@ -832,7 +839,7 @@ def transformer_model(input_tensor,
       with tf.variable_scope("attention"):
         attention_heads = []
         with tf.variable_scope("self"):
-          attention_head = attention_layer(
+          attention_head, viz_attn = attention_layer(
               from_tensor=layer_input,
               to_tensor=layer_input,
               attention_mask=attention_mask,
@@ -845,6 +852,9 @@ def transformer_model(input_tensor,
               from_seq_length=seq_length,
               to_seq_length=seq_length)
           attention_heads.append(attention_head)
+
+          # collect attention softmax output from each layer
+          viz_attns.append(viz_attn)
 
         attention_output = None
         if len(attention_heads) == 1:
@@ -883,15 +893,19 @@ def transformer_model(input_tensor,
         prev_output = layer_output
         all_layer_outputs.append(layer_output)
 
+  viz_attns = tf.transpose(tf.convert_to_tensor(viz_attns),
+                           [1,0,2,3,4])
+  # tf.logging.info("Viz Attention Shape: " + str(viz_attns.get_shape().as_list()))
+
   if do_return_all_layers:
     final_outputs = []
     for layer_output in all_layer_outputs:
       final_output = reshape_from_matrix(layer_output, input_shape)
       final_outputs.append(final_output)
-    return final_outputs
+    return final_outputs, viz_attns
   else:
     final_output = reshape_from_matrix(prev_output, input_shape)
-    return final_output
+    return final_output, viz_attns
 
 
 def get_shape_list(tensor, expected_rank=None, name=None):
