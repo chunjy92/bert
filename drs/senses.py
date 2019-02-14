@@ -30,38 +30,45 @@ SENSES = [
 ]
 
 
-def to_degree(sense, degree=2):
+def to_level(sense, level=2):
   s_split = sense.split(".")
-  s_join = ".".join(s_split[:degree])
+  s_join = ".".join(s_split[:level])
   return s_join
 
-def get_senses_with_degree(degree=2, export=True):
-  """"""
-  out_p = "./senses.txt"
-  if degree==3:
-    # return SENSES
+def get_senses_with_level(level=2, sense_path=None):
+  """ Collect unique senses from PDTB
+
+  Args:
+    level: Sense level
+    export: whether to save collected senses
+
+  Returns:
+    list of unique senses with appropriate level
+  """
+  ret = []
+
+  if level==3:
     ret = SENSES
-  elif degree==2:
-    if os.path.exists(out_p):
+  elif level==2:
+    if sense_path is not None and os.path.exists(sense_path):
       ret = []
-      with open(out_p, 'r') as f:
+      with open(sense_path, 'r') as f:
         for line in f.readlines():
-          line = to_degree(line.strip())
+          line = to_level(line.strip())
           ret.append(line)
       return ret
 
     ret = []
     for sense in SENSES:
-      sense = to_degree(sense, degree)
+      sense = to_level(sense, level)
       if sense not in ret:
         ret.append(sense)
-    ret = list(set(ret))
 
-  elif degree==1:
+  elif level==1:
     raise ValueError("1 Degree not accepted")
 
-  if export:
-    with open(out_p, "w") as f:
+  if sense_path is not None and not os.path.exists(sense_path):
+    with open(sense_path, "w") as f:
       for sense in ret:
         f.write(sense)
         f.write("\n")

@@ -100,6 +100,9 @@ def _get_attentions(tokens_a, tokens_b, attn):
     slice_a = slice(0, len(tokens_a)) # Positions corresponding to sentence A in input
     slice_b = slice(len(tokens_a), len(tokens_a) + len(tokens_b)) # Position corresponding to sentence B in input
     num_layers = len(attn)
+
+    print("Num LAyers:", num_layers)
+
     for layer in range(num_layers):
         layer_attn = attn[layer] # Get layer attention (assume batch size = 1), shape = [num_heads, seq_len, seq_len]
         all_attns.append(layer_attn.tolist()) # Append AB->AB attention for layer, across all heads

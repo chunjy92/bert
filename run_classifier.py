@@ -18,13 +18,11 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
-import collections
-import csv
-import json
-
 import codecs
-import numpy as np
+import collections
+import json
 import os
+
 import tensorflow as tf
 
 import drs
@@ -41,7 +39,8 @@ flags.DEFINE_string(
     "The output directory where the model checkpoints will be written.")
 
 # other
-flags.DEFINE_string("task_type", "implicit", "Implicit or Explicit")
+flags.DEFINE_string("data_type", None,
+                    "The data domain. [all, explicit, implicit].")
 
 flags.DEFINE_string(
     "data_dir", "/home/b/jchun/Documents/Data/DiscourseRelation",
@@ -174,21 +173,20 @@ class DataProcessor(object):
     """Gets the list of labels for this data set."""
     raise NotImplementedError()
 
-  @classmethod
-  def _read_tsv(cls, input_file, quotechar=None):
-    """Reads a tab separated value file."""
-    with tf.gfile.Open(input_file, "r") as f:
-      reader = csv.reader(f, delimiter="\t", quotechar=quotechar)
-      lines = []
-      for line in reader:
-        lines.append(line)
-      return lines
 
+class DRSProcessor(DataProcessor):
+  """"""
+  def __init__(self, data_type=None):
+    if data_type == 'all':
+      self._data_type = ""
+    else:
+      self._data_type = data_type
 
-class ImplicitDRSProcessor(DataProcessor):
-  """Processor for the DRS Sense data set"""
   def get_labels(self):
-    return drs.get_senses_with_degree(degree=2)
+    proj_root = os.path.dirname(os.path.abspath(__file__))
+    sense_path = os.path.join(proj_root, "senses.txt")
+    return drs.get_senses_with_level(level=2,
+                                     sense_path=sense_path)
 
   def get_train_examples(self, data_dir):
     return self._create_examples(data_dir, "train")
@@ -199,70 +197,49 @@ class ImplicitDRSProcessor(DataProcessor):
   def get_test_examples(self, data_dir):
     return self._create_examples(data_dir, "test")
 
-  def _create_examples(self, data_dir, set_type):
-    """Only implicit examples
+  def _create_examples(self, data_dir, dataset_type):
+    """Both Explicit and Implicit examples
+
+    Args:
+      data_dir: path to DRC dataset root
+      dataset_type: all, implicit or explicit
+
+    Returns:
+      list of InputExamples
     """
-    imp_dir = os.path.join(data_dir, "implicit", set_type)
+    imp_dir = os.path.join(data_dir, self._data_type, dataset_type)
     filename = os.path.join(imp_dir, "relations.json")
 
     pdtb = codecs.open(filename, encoding='utf-8')
 
     examples = []
     for i, pdtb_line in enumerate(pdtb):
-      guid = "%s-%d" % (set_type, i)
+      guid = "%s-%d" % (dataset_type, i)
+
       rel  = json.loads(pdtb_line)
 
       arg1 = tokenization.convert_to_unicode(rel['Arg1']['RawText'])
       arg2 = tokenization.convert_to_unicode(rel['Arg2']['RawText'])
-      sense_list = rel['Sense']
-
-      # for multiple senses, duplicate example but each labeled with different
-      # sense
-      for sense in sense_list:
-        label = tokenization.convert_to_unicode(drs.to_degree(sense, 2))
-        examples.append(
-          InputExample(guid=guid, text_a=arg1, text_b=arg2, label=label))
-    return examples
-
-class ExplicitDRSProcessor(DataProcessor):
-  """Processor for the DRS Sense data set"""
-  def get_labels(self):
-    return drs.get_senses_with_degree(degree=2)
-
-  def get_train_examples(self, data_dir):
-    return self._create_examples(data_dir, "train")
-
-  def get_dev_examples(self, data_dir):
-    return self._create_examples(data_dir, "dev")
-
-  def get_test_examples(self, data_dir):
-    return self._create_examples(data_dir, "test")
-
-  def _create_examples(self, data_dir, set_type):
-    """Only explicit examples
-    """
-    imp_dir = os.path.join(data_dir, "explicit", set_type)
-    filename = os.path.join(imp_dir, "relations.json")
-
-    pdtb = codecs.open(filename, encoding='utf-8')
-
-    examples = []
-    for i, pdtb_line in enumerate(pdtb):
-      guid = "%s-%d" % (set_type, i)
-      rel  = json.loads(pdtb_line)
-
       conn = tokenization.convert_to_unicode(rel['Connective']['RawText'])
-      arg1 = tokenization.convert_to_unicode(rel['Arg1']['RawText'])
-      arg2 = tokenization.convert_to_unicode(rel['Arg2']['RawText'])
       sense_list = rel['Sense']
 
       # for multiple senses, duplicate example but each labeled with different
       # sense
       for sense in sense_list:
-        label = tokenization.convert_to_unicode(drs.to_degree(sense, 2))
-        examples.append(
-          InputExample(guid=guid, text_a=arg1, text_b=arg2, text_c=conn,
-                       label=label))
+        label = tokenization.convert_to_unicode(drs.to_level(sense, 2))
+
+        if conn == "":
+          input_example = InputExample(guid=guid,
+                                       text_a=arg1,
+                                       text_b=arg2,
+                                       label=label)
+        else:
+          input_example = InputExample(guid=guid,
+                                       text_a=arg1,
+                                       text_b=arg2,
+                                       text_c=conn,
+                                       label=label)
+        examples.append(input_example)
     return examples
 
 def _truncate_seq_pair(tokens_a, tokens_b, max_length):
@@ -331,8 +308,6 @@ def convert_single_example(ex_index, example, label_list, max_seq_length,
     _truncate_seq_triple(tokens_a, tokens_b, tokens_c,
                          max_seq_length-4)
   elif tokens_b:
-    # Modifies `tokens_a` and `tokens_b` in place so that the total
-    # length is less than the specified length.
     # Account for [CLS], [SEP], [SEP] with "- 3"
     _truncate_seq_pair(tokens_a, tokens_b, max_seq_length - 3)
   else:
@@ -545,6 +520,7 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
     input_mask = features["input_mask"]
     segment_ids = features["segment_ids"]
     label_ids = features["label_ids"]
+
     is_real_example = None
     if "is_real_example" in features:
       is_real_example = tf.cast(features["is_real_example"], dtype=tf.float32)
@@ -603,13 +579,13 @@ def model_fn_builder(bert_config, num_labels, init_checkpoint, learning_rate,
           mode=mode,
           loss=total_loss,
           eval_metrics=eval_metrics,
-          predictions={"probabilities": probabilities,
-                       "viz_attns:": viz_attns})
+          predictions={"probabilities": probabilities})
     else: # predict case
 
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           predictions={"probabilities": probabilities,
+                       "labels_id": tf.argmax(probabilities, axis=1),
                        "viz_attns": viz_attns})
     return output_spec
 
@@ -636,11 +612,11 @@ def main(_):
 
   tf.gfile.MakeDirs(FLAGS.output_dir)
 
-  task_type = FLAGS.task_type.lower()
-  if task_type.startswith("imp"):
-    processor = ImplicitDRSProcessor()
-  else:
-    processor = ExplicitDRSProcessor()
+  data_type = FLAGS.data_type.lower()
+  assert data_type in ['all', 'implicit',  'explicit']
+  tf.logging.info("Task Type: {}".format(data_type))
+
+  processor = DRSProcessor(data_type)
 
   label_list = processor.get_labels()
   tokenizer  = tokenization.FullTokenizer(
@@ -747,26 +723,16 @@ def main(_):
         drop_remainder=False)
 
     result = estimator.predict(input_fn=predict_input_fn)
-
     tf.logging.info("Exporting predictions..")
 
-    output_predict_file = os.path.join(FLAGS.output_dir, "test_results.txt")
+    output_predict_file = os.path.join(FLAGS.output_dir, "test_predictions.txt")
     with tf.gfile.GFile(output_predict_file, "w") as writer:
       num_written_lines = 0
       tf.logging.info("***** Predict results *****")
       for (i, prediction) in enumerate(result):
-        # if i==0:
-        #   a = prediction['viz_attns']
-        #
-        #   tf.logging.info("Pred ATTN PRobs Info:")
-        #   tf.logging.info("{}, {}".format(str(a.dtype), str(a.shape)))
-        #   tf.logging.info("{}".format(str(a)))
-
-        # tf.logging.info("{}-".format(i))
-        probabilities = prediction["probabilities"]
         if i >= num_actual_predict_examples:
           break
-        output_line = label_list[np.argmax(probabilities)] + "\n"
+        output_line = label_list[prediction['labels_id']] + "\n"
         writer.write(output_line)
         num_written_lines += 1
 
@@ -776,6 +742,8 @@ def main(_):
 
 if __name__ == "__main__":
   flags.mark_flag_as_required("output_dir")
+  flags.mark_flag_as_required("data_type")
+  tf.gfile.MakeDirs(FLAGS.output_dir)
 
   if not FLAGS.do_lower_case and FLAGS.bert_config_file.startswith("uncased"):
     tf.logging.info("Using uncased BERT pre-trained model while lowering case:"
@@ -786,10 +754,5 @@ if __name__ == "__main__":
     tf.logging.info("Using cased BERT pre-trained model while not lowering "
                     "case: Proceeding with cased model")
     FLAGS.do_lower_case = False
-
-  if FLAGS.do_lower_case:
-    tf.logging.info("Loading Uncased BERT")
-  else:
-    tf.logging.info("Loading Cased BERT")
 
   tf.app.run()

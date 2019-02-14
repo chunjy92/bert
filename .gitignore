@@ -118,6 +118,4 @@ dmypy.json
 __get*.py
 
 .idea/
-visualization/bertviz_
-visualization/attention_.py
-visualization/attention__.py
+visualization/

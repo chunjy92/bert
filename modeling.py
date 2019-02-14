@@ -895,7 +895,6 @@ def transformer_model(input_tensor,
 
   viz_attns = tf.transpose(tf.convert_to_tensor(viz_attns),
                            [1,0,2,3,4])
-  # tf.logging.info("Viz Attention Shape: " + str(viz_attns.get_shape().as_list()))
 
   if do_return_all_layers:
     final_outputs = []
