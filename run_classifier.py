@@ -39,8 +39,8 @@ flags.DEFINE_string(
     "The output directory where the model checkpoints will be written.")
 
 # other
-flags.DEFINE_string("data_type", None,
-                    "The data domain. [all, explicit, implicit].")
+flags.DEFINE_string("data_type", None, "The data domain. accepts:"
+  "[all, explicit,  implicit,  non_explicit].")
 
 flags.DEFINE_string(
     "data_dir", "/home/b/jchun/Documents/Data/DiscourseRelation",
@@ -154,39 +154,15 @@ class InputFeatures(object):
     self.is_real_example = is_real_example
 
 
-class DataProcessor(object):
-  """Base class for data converters for sequence classification data sets."""
-
-  def get_train_examples(self, data_dir):
-    """Gets a collection of `InputExample`s for the train set."""
-    raise NotImplementedError()
-
-  def get_dev_examples(self, data_dir):
-    """Gets a collection of `InputExample`s for the dev set."""
-    raise NotImplementedError()
-
-  def get_test_examples(self, data_dir):
-    """Gets a collection of `InputExample`s for prediction."""
-    raise NotImplementedError()
-
-  def get_labels(self):
-    """Gets the list of labels for this data set."""
-    raise NotImplementedError()
-
-
-class DRSProcessor(DataProcessor):
+class DRSProcessor(object):
   """"""
-  def __init__(self, data_type=None):
-    if data_type == 'all':
-      self._data_type = ""
-    else:
-      self._data_type = data_type
+  def __init__(self, data_type=None, sense_path=None):
+    self._data_type = data_type
+    self._sense_path = sense_path
 
   def get_labels(self):
-    proj_root = os.path.dirname(os.path.abspath(__file__))
-    sense_path = os.path.join(proj_root, "senses.txt")
     return drs.get_senses_with_level(level=2,
-                                     sense_path=sense_path)
+                                     sense_path=self._sense_path)
 
   def get_train_examples(self, data_dir):
     return self._create_examples(data_dir, "train")
@@ -207,16 +183,20 @@ class DRSProcessor(DataProcessor):
     Returns:
       list of InputExamples
     """
-    imp_dir = os.path.join(data_dir, self._data_type, dataset_type)
-    filename = os.path.join(imp_dir, "relations.json")
+    dataset_dir  = os.path.join(data_dir, dataset_type)
+    rel_filename = os.path.join(dataset_dir, "relations.json")
 
-    pdtb = codecs.open(filename, encoding='utf-8')
+    pdtb = codecs.open(rel_filename, encoding='utf-8')
 
     examples = []
     for i, pdtb_line in enumerate(pdtb):
       guid = "%s-%d" % (dataset_type, i)
 
       rel  = json.loads(pdtb_line)
+
+      type_ = rel['Type'].lower()
+      if self._data_type != "all" and type_ != self._data_type:
+        continue
 
       arg1 = tokenization.convert_to_unicode(rel['Arg1']['RawText'])
       arg2 = tokenization.convert_to_unicode(rel['Arg2']['RawText'])
@@ -228,17 +208,32 @@ class DRSProcessor(DataProcessor):
       for sense in sense_list:
         label = tokenization.convert_to_unicode(drs.to_level(sense, 2))
 
-        if conn == "":
+        # TODO: Currently we only assume all vs implicit vs explicit
+        # in future, should handle non_explicits
+        if type_ == "implicit":
           input_example = InputExample(guid=guid,
                                        text_a=arg1,
                                        text_b=arg2,
                                        label=label)
-        else:
+        elif type_ == "explicit":
           input_example = InputExample(guid=guid,
                                        text_a=arg1,
                                        text_b=arg2,
                                        text_c=conn,
                                        label=label)
+        else:
+          # entrel and altlex, only if self._data_type == 'all'
+          if conn == "":
+            input_example = InputExample(guid=guid,
+                                         text_a=arg1,
+                                         text_b=arg2,
+                                         label=label)
+          else:
+            input_example = InputExample(guid=guid,
+                                         text_a=arg1,
+                                         text_b=arg2,
+                                         text_c=conn,
+                                         label=label)
         examples.append(input_example)
     return examples
 
@@ -613,10 +608,12 @@ def main(_):
   tf.gfile.MakeDirs(FLAGS.output_dir)
 
   data_type = FLAGS.data_type.lower()
-  assert data_type in ['all', 'implicit',  'explicit']
+  assert data_type in ['all', 'implicit',  'explicit', 'non_explicit']
   tf.logging.info("Task Type: {}".format(data_type))
 
-  processor = DRSProcessor(data_type)
+  proj_root = os.path.dirname(os.path.abspath(__file__))
+  sense_path = os.path.join(proj_root, "senses.txt")
+  processor = DRSProcessor(data_type, sense_path)
 
   label_list = processor.get_labels()
   tokenizer  = tokenization.FullTokenizer(
@@ -737,6 +734,7 @@ def main(_):
         num_written_lines += 1
 
     tf.logging.info("{} vs {}".format(num_written_lines, num_actual_predict_examples))
+    tf.logging.info("{} Done.".format(FLAGS.data_type))
     assert num_written_lines == num_actual_predict_examples
 
 

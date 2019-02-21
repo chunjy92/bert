@@ -119,3 +119,4 @@ __get*.py
 
 .idea/
 visualization/
+stats.md

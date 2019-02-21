@@ -35,6 +35,10 @@ def to_level(sense, level=2):
   s_join = ".".join(s_split[:level])
   return s_join
 
+def get_level(sense):
+  s_split = sense.split(".")
+  return len(s_split)
+
 def get_senses_with_level(level=2, sense_path=None):
   """ Collect unique senses from PDTB
 
